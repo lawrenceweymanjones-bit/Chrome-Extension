@@ -39,8 +39,24 @@ function slug(s) {
   return (s || 'screenshot').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
 }
 
+// Upgrade thumbnails saved by older versions, one at a time, then re-render.
+let upgrading = false;
+async function upgradeOldThumbnails() {
+  if (upgrading) return;
+  const stale = shots.filter((s) => SnapDB.needsThumbnailRefresh(s));
+  if (!stale.length) return;
+  upgrading = true;
+  try {
+    for (const s of stale) await SnapDB.refreshThumbnail(s.id);
+  } finally {
+    upgrading = false;
+  }
+  if (current < 0) render();
+}
+
 async function render() {
   shots = await SnapDB.list();
+  upgradeOldThumbnails();
 
   // Release old thumbnail URLs.
   for (const u of thumbUrls.values()) URL.revokeObjectURL(u);

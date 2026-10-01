@@ -57,17 +57,25 @@
     return res.blob();
   }
 
-  // Produce a small JPEG thumbnail so the gallery grid loads fast.
-  async function makeThumbnail(blob, maxWidth) {
+  // Thumbnail width. Cards are up to ~500 CSS px wide, so 1200 keeps them
+  // crisp on 2x displays; WebP keeps the stored size small.
+  const THUMB_WIDTH = 1200;
+
+  // Produce a thumbnail so the gallery grid loads fast. Uses high-quality
+  // resampling so downscaled text stays legible.
+  async function makeThumbnail(blob, maxWidth = THUMB_WIDTH) {
     try {
       const bitmap = await createImageBitmap(blob);
       const scale = Math.min(1, maxWidth / bitmap.width);
       const w = Math.max(1, Math.round(bitmap.width * scale));
       const h = Math.max(1, Math.round(bitmap.height * scale));
       const canvas = new OffscreenCanvas(w, h);
-      canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(bitmap, 0, 0, w, h);
       bitmap.close();
-      return await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 });
+      return await canvas.convertToBlob({ type: 'image/webp', quality: 0.9 });
     } catch (e) {
       return blob; // fall back to the full image
     }
@@ -76,7 +84,7 @@
   const SnapDB = {
     async add({ dataUrl, title, url }) {
       const blob = await dataUrlToBlob(dataUrl);
-      const thumb = await makeThumbnail(blob, 480);
+      const thumb = await makeThumbnail(blob);
       let width = 0;
       let height = 0;
       try {
@@ -96,6 +104,7 @@
         size: blob.size,
         blob,
         thumb,
+        thumbWidth: THUMB_WIDTH,
       };
       await tx('readwrite', (s) => s.add(shot));
       return shot;
@@ -119,6 +128,18 @@
       const next = { ...shot, ...patch, id };
       await tx('readwrite', (s) => s.put(next));
       return next;
+    },
+
+    // Rebuild the thumbnail for a shot saved with an older, smaller size.
+    async refreshThumbnail(id) {
+      const shot = await this.get(id);
+      if (!shot || !shot.blob) return null;
+      const thumb = await makeThumbnail(shot.blob);
+      return this.update(id, { thumb, thumbWidth: THUMB_WIDTH });
+    },
+
+    needsThumbnailRefresh(shot) {
+      return !shot.thumbWidth || shot.thumbWidth < THUMB_WIDTH;
     },
 
     remove(id) {
